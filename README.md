@@ -7,7 +7,7 @@ Neste projeto foi desenvolvida uma solução que mapeia todas as informações d
 - Realizar a filtragem para exibição de 60 produtos por página;
 - Mapeia todas as categorias encontradas de bebidas;
 - Faz o acesso a cada categoria para mapear cada um de seus produtos;
-- Salva as informações capturadas organizadas por categirias, em um arquivo presente em "result/output.json", após a execução;
+- Salva as informações capturadas organizadas por categorias, em um arquivo presente em "result/output.json", após a execução;
 
 ## Instruções para rodar o projeto localmente:
 
