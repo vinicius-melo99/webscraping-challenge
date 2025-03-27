@@ -205,7 +205,6 @@ const clusterTask = async (cluster) => {
 const getProductsByCategory = async (categoriesUrlList) => {
   const cluster = await initCluster();
   // let counter = 0;
-
   await clusterTask(cluster);
 
   for (const { categoryUrl, label, name } of categoriesUrlList) {
