@@ -230,7 +230,7 @@ const getProductsByCategory = async (categoriesUrlList) => {
 
   //starts the Puppeteer browser.
   const browser = await p.launch({
-    headless: false, //Change this parameter to false, to disable headless and view the interactions on the screen.
+    headless: true, //Change this parameter to false, to disable headless and view the interactions on the screen.
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
 
