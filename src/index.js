@@ -11,7 +11,7 @@ let categoryId = 1;
 const initCluster = () => {
   return Cluster.launch({
     concurrency: Cluster.CONCURRENCY_BROWSER,
-    maxConcurrency: 7,
+    maxConcurrency: 7, // defines the maximum number of concurrent browser instances.
     puppeteerOptions: {
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
@@ -39,7 +39,7 @@ const createJsonOutput = (file) => {
   }
 };
 
-// provides a category list of drinks, returning an array with objects containing: name, label, categoryUrs
+// provides a category list of beverages, returning an array with objects containing: name, label, categoryUrs
 const getCategoriesList = (apiResult, url) => {
   const {
     data: {
@@ -47,9 +47,9 @@ const getCategoriesList = (apiResult, url) => {
     },
   } = apiResult;
 
-  const [categoryInfo] = facets
+  const categoryInfo = facets
     .map((facet) => facet)
-    .filter(({ label }) => label === 'Categoria');
+    .find(({ label }) => label === 'Categoria');
 
   const { values: categories } = categoryInfo;
 
@@ -60,12 +60,14 @@ const getCategoriesList = (apiResult, url) => {
   }));
 };
 
+//processes API results to extract and format product information
 const categorizeProducts = (apiResults, categoryName) => {
   const baseUrl = 'https://mercado.carrefour.com.br';
-  let formatedProducts = [];
+  let formatedProducts = []; //store formatted product data
 
   apiResults.forEach((productsData) => {
-    let {
+    // destructuring to extract product list from API response (edges)
+    const {
       data: {
         search: {
           products: { edges },
@@ -73,6 +75,7 @@ const categorizeProducts = (apiResults, categoryName) => {
       },
     } = productsData;
 
+    // mapping over products to extract them relevant information
     formatedProducts = [
       ...formatedProducts,
       ...edges.map(({ node }) => ({
@@ -86,6 +89,7 @@ const categorizeProducts = (apiResults, categoryName) => {
     ];
   });
 
+  //creates a category object with the information extracted to pushes into categorizedProducts array
   const category = {
     id: categoryId,
     count: formatedProducts.length,
@@ -93,40 +97,48 @@ const categorizeProducts = (apiResults, categoryName) => {
     products: formatedProducts,
   };
 
-  categorizedProducts.categories.push(category);
+  categorizedProducts.categories.push(category); // inserts the categorized information into the 'categorizedProducts' array
   categoryId++;
-  return category.products.length;
+  return category.products.length; //returns the quantity of products extracted in such category
 };
 
+// fetches product data from carrefour Api with specific filters
 const apiCall = async (after, categoryLabel) => {
-  const MAX_PRODUCTS_PER_CALL = 100;
+  const MAX_PRODUCTS_PER_CALL = 100; // maximum products per call allowed by api
+  const PIRACICABA_REGION_ID = 'v2.16805FBD22EC494F5D2BD799FE9F1FB7'; //specifies the region id of the piracicaba store
+
+  //constructs api query parameters for filtering products, extracted by looking at the api call in the chrome network tab (decoded by an online decoder).
   let apiQueryParams = {
     isPharmacy: false,
     first: MAX_PRODUCTS_PER_CALL,
-    after: `${after}`,
+    after: `${after}`, //cursor for pagination to fetch the next set of products (if the first result > 100)
     sort: 'score_desc',
     term: '',
     selectedFacets: [
       { key: 'category-1', value: 'bebidas' },
       { key: 'category-1', value: '1279' },
-      { key: 'category-2', value: categoryLabel },
+      { key: 'category-2', value: categoryLabel }, //specifies which category the products will be extracted from
       {
         key: 'channel',
         value: JSON.stringify({
           salesChannel: 2,
-          regionId: 'v2.16805FBD22EC494F5D2BD799FE9F1FB7',
+          regionId: PIRACICABA_REGION_ID,
         }),
       },
       { key: 'locale', value: 'pt-BR' },
-      { key: 'region-id', value: 'v2.16805FBD22EC494F5D2BD799FE9F1FB7' },
+      { key: 'region-id', value: PIRACICABA_REGION_ID },
     ],
   };
+
+  // encodes the query parameters to be used in the api url
   const encodedParams = encodeURIComponent(JSON.stringify(apiQueryParams));
   const completeUrl = `https://mercado.carrefour.com.br/api/graphql?operationName=ProductsQuery&variables=${encodedParams}`;
+
+  // defines request headers to mimic a real browser request to avoid any blocks
   const headers = {
     'User-Agent':
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    Referer: `https://mercado.carrefour.com.br/bebidas/${categoryLabel}`,
+    Referer: `https://mercado.carrefour.com.br/bebidas/${categoryLabel}`, // sets referer to simulate navigation
     Accept:
       'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
@@ -147,17 +159,20 @@ const apiCall = async (after, categoryLabel) => {
   return data;
 };
 
+//fetches all products from a category using paginated api requests
 const getProductsByApiRequest = async (categoryLabel, categoryName) => {
   const MAX_PRODUCTS_PER_CALL = 100;
   const apiResults = [];
   let afterNum = 0;
 
+  // makes the initial api call to get the first list of products
   let response = await apiCall(afterNum, categoryLabel);
 
   const totalProducts = response.data.search.products.pageInfo.totalCount;
 
   apiResults.push(response);
 
+  // if there're more products than the max per call (100), continue fetching in batches
   if (totalProducts > MAX_PRODUCTS_PER_CALL) {
     afterNum += 100;
     while (afterNum < totalProducts) {
@@ -166,10 +181,13 @@ const getProductsByApiRequest = async (categoryLabel, categoryName) => {
     }
   }
 
+  // sends gathered data to the categorization function
   categorizeProducts(apiResults, categoryName);
+
   return totalProducts;
 };
 
+// it defines a task for the pupeteer-cluster to fetch products in parallel actions
 const clusterTask = async (cluster) => {
   await cluster.task(async ({ data: { label, name } }) => {
     console.log(`>> Obtendo produtos da categoria ${name} 🔍\n`);
@@ -187,16 +205,18 @@ const clusterTask = async (cluster) => {
   });
 };
 
+// delegates to each generated cluster a different category, to obtain its products
 const getProductsByCategory = async (categoriesUrlList) => {
   const cluster = await initCluster();
   // let counter = 0;
-  await clusterTask(cluster);
 
+  await clusterTask(cluster); // defines the cluster task for processing products
+
+  // iterates over the category list and adds each category to the cluster queue
   for (const { label, name } of categoriesUrlList) {
     await cluster.queue({ label, name });
     // counter++;
-
-    // if (counter === 10) break;
+    // if (counter === 4) break; //limits the processing categories, to debbuging purposes
   }
 
   await cluster.idle();

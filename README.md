@@ -23,7 +23,7 @@ Na raiz do projeto, instale as dependências executando o seguinte comando:
 npm install
 ```
 
-Caso queira executar o script sem headless (exibindo as interações com o navegador na tela), altere a linha 218 em "src/index.js", definindo o headless para 'false':
+Caso queira executar o script sem headless (exibindo as interações com o navegador na tela), altere a linha 238 em "src/index.js", definindo o headless para 'false':
 
 ```js
   const browser = await p.launch({
