@@ -11,7 +11,7 @@ let categoryId = 1;
 const initCluster = () => {
   return Cluster.launch({
     concurrency: Cluster.CONCURRENCY_BROWSER,
-    maxConcurrency: 5,
+    maxConcurrency: 7,
     puppeteerOptions: {
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
@@ -171,25 +171,10 @@ const getProductsByApiRequest = async (categoryLabel, categoryName) => {
 };
 
 const clusterTask = async (cluster) => {
-  await cluster.task(async ({ page, data: { url, label, name } }) => {
+  await cluster.task(async ({ data: { label, name } }) => {
     console.log(`>> Obtendo produtos da categoria ${name} 🔍\n`);
     try {
       let totalProductsFinded = 0;
-      await page.setRequestInterception(true);
-
-      page.on('request', (req) => {
-        if (
-          ['image', 'stylesheet', 'font', 'fetch', 'xhr'].includes(
-            req.resourceType(),
-          )
-        ) {
-          req.abort();
-        } else {
-          req.continue();
-        }
-      });
-
-      await page.goto(url, { waitUntil: 'domcontentloaded' });
 
       totalProductsFinded = await getProductsByApiRequest(label, name);
 
@@ -207,8 +192,8 @@ const getProductsByCategory = async (categoriesUrlList) => {
   // let counter = 0;
   await clusterTask(cluster);
 
-  for (const { categoryUrl, label, name } of categoriesUrlList) {
-    await cluster.queue({ url: categoryUrl, label, name });
+  for (const { label, name } of categoriesUrlList) {
+    await cluster.queue({ label, name });
     // counter++;
 
     // if (counter === 10) break;
