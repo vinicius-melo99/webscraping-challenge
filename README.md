@@ -1,4 +1,4 @@
-# Carrefour Web Scraper
+# 🛒 Carrefour Web Scraper
 
 Neste projeto foi desenvolvida uma solução que mapeia todas as informações do setor de bebidas do carrefour (loja Hiper Piracicaba). Este algorítmo é capaz de:
 
@@ -9,7 +9,7 @@ Neste projeto foi desenvolvida uma solução que mapeia todas as informações d
 - Faz o acesso a cada categoria para mapear cada um de seus produtos;
 - Salva as informações capturadas organizadas por categorias, em um arquivo presente em "result/output.json", após a execução;
 
-## Instruções para rodar o projeto localmente:
+## 📝 Instruções para rodar o projeto localmente:
 
 Clone o meu repositório:
 
@@ -36,4 +36,16 @@ Execute o script na raiz com:
 ```bash
 npm start
 ```
+Ou
+```bash
+node src/index.js
+```
+
 ### Após a execução, o progresso poderá ser acompanhado na tela. Ao término, a saída será salva na raiz: "result/output.json"
+
+# 🔄 Changelog
+
+### 📌 [1.1.0] - 26/03/2025
+- Melhorias significativas de desempenho;
+- Adição do puppteer-cluster, para executar tarefas paralelamente;
+- Adicionada interceptação/chamada às API's do Carrefour via fetch para capturar os dados de forma mais eficiente

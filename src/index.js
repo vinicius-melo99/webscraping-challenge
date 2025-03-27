@@ -1,12 +1,25 @@
 const p = require('puppeteer');
-const { setTimeout } = require('timers/promises');
 const fs = require('fs');
 const path = require('path');
+const { setTimeout } = require('timers/promises');
+const { Cluster } = require('puppeteer-cluster');
 
-const formatPriceToNumber = (price) => {
-  return Number(price.replace(/[^0-9,]/g, '').replace(',', '.'));
+const categorizedProducts = { categories: [] };
+let categoryId = 1;
+
+// inits cluster of puppeteer-cluster
+const initCluster = () => {
+  return Cluster.launch({
+    concurrency: Cluster.CONCURRENCY_BROWSER,
+    maxConcurrency: 5,
+    puppeteerOptions: {
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    },
+  });
 };
 
+// functions to create the final json outpout file with the results
 const createJsonOutput = (file) => {
   const dirPath = path.resolve(__dirname, '../result/');
   const outPath = path.resolve(__dirname, '../result/output.json');
@@ -18,57 +31,245 @@ const createJsonOutput = (file) => {
   try {
     const jsonFormat = JSON.stringify(file, null, 2);
     fs.writeFileSync(outPath, jsonFormat);
-    console.log(`A saída dos dados foi salva em: ${outPath}`);
+    console.log(
+      `✅ Execução concluída! A saída dos dados foi salva em: ${outPath} ✅`,
+    );
   } catch (e) {
     console.log(`Falha ao escrever o arquivo. Tente novamene: ${e}`);
   }
 };
 
-const createProduct = (title, price, url) => ({
-  title,
-  price,
-  url,
-});
+// provides a category list of drinks, returning an array with objects containing: name, label, categoryUrs
+const getCategoriesList = (apiResult, url) => {
+  const {
+    data: {
+      search: { facets },
+    },
+  } = apiResult;
+
+  const [categoryInfo] = facets
+    .map((facet) => facet)
+    .filter(({ label }) => label === 'Categoria');
+
+  const { values: categories } = categoryInfo;
+
+  return categories.map(({ label: name, value: label }) => ({
+    name,
+    label,
+    categoryUrl: `${url}/${label}`,
+  }));
+};
+
+const categorizeProducts = (apiResults, categoryName) => {
+  const baseUrl = 'https://mercado.carrefour.com.br';
+  let formatedProducts = [];
+
+  apiResults.forEach((productsData) => {
+    let {
+      data: {
+        search: {
+          products: { edges },
+        },
+      },
+    } = productsData;
+
+    formatedProducts = [
+      ...formatedProducts,
+      ...edges.map(({ node }) => ({
+        id: node.id,
+        name: node.name || 'sem informação',
+        slug: node.slug || 'sem informação',
+        brand: node.brand.brandName || 'sem informação',
+        price: node.offers.lowPrice || 'sem informação',
+        url: `${baseUrl}/${node.slug || 'sem informação'}/p`,
+      })),
+    ];
+  });
+
+  const category = {
+    id: categoryId,
+    count: formatedProducts.length,
+    name: categoryName,
+    products: formatedProducts,
+  };
+
+  categorizedProducts.categories.push(category);
+  categoryId++;
+  return category.products.length;
+};
+
+const apiCall = async (after, categoryLabel) => {
+  const MAX_PRODUCTS_PER_CALL = 100;
+  let apiQueryParams = {
+    isPharmacy: false,
+    first: MAX_PRODUCTS_PER_CALL,
+    after: `${after}`,
+    sort: 'score_desc',
+    term: '',
+    selectedFacets: [
+      { key: 'category-1', value: 'bebidas' },
+      { key: 'category-1', value: '1279' },
+      { key: 'category-2', value: categoryLabel },
+      {
+        key: 'channel',
+        value: JSON.stringify({
+          salesChannel: 2,
+          regionId: 'v2.16805FBD22EC494F5D2BD799FE9F1FB7',
+        }),
+      },
+      { key: 'locale', value: 'pt-BR' },
+      { key: 'region-id', value: 'v2.16805FBD22EC494F5D2BD799FE9F1FB7' },
+    ],
+  };
+  const encodedParams = encodeURIComponent(JSON.stringify(apiQueryParams));
+  const completeUrl = `https://mercado.carrefour.com.br/api/graphql?operationName=ProductsQuery&variables=${encodedParams}`;
+  const headers = {
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    Referer: `https://mercado.carrefour.com.br/bebidas/${categoryLabel}`,
+    Accept:
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+  };
+
+  const response = await fetch(completeUrl, {
+    headers: {
+      ...headers,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`${response.status}: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+
+  return data;
+};
+
+const getProductsByApiRequest = async (categoryLabel, categoryName) => {
+  const MAX_PRODUCTS_PER_CALL = 100;
+  const apiResults = [];
+  let afterNum = 0;
+
+  let response = await apiCall(afterNum, categoryLabel);
+
+  const totalProducts = response.data.search.products.pageInfo.totalCount;
+
+  apiResults.push(response);
+
+  if (totalProducts > MAX_PRODUCTS_PER_CALL) {
+    afterNum += 100;
+    while (afterNum < totalProducts) {
+      apiResults.push(await apiCall(afterNum, categoryLabel));
+      afterNum += 100;
+    }
+  }
+
+  categorizeProducts(apiResults, categoryName);
+  return totalProducts;
+};
+
+const clusterTask = async (cluster) => {
+  await cluster.task(async ({ page, data: { url, label, name } }) => {
+    console.log(`>> Obtendo produtos da categoria ${name} 🔍\n`);
+    try {
+      let totalProductsFinded = 0;
+      await page.setRequestInterception(true);
+
+      page.on('request', (req) => {
+        if (
+          ['image', 'stylesheet', 'font', 'fetch', 'xhr'].includes(
+            req.resourceType(),
+          )
+        ) {
+          req.abort();
+        } else {
+          req.continue();
+        }
+      });
+
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
+
+      totalProductsFinded = await getProductsByApiRequest(label, name);
+
+      console.log(
+        `>> Total de ${totalProductsFinded} produtos obtidos da categoria: ${name} ✅\n`,
+      );
+    } catch (e) {
+      console.error(`>> Falha na execução desta instância: ${e} ❌\n`);
+    }
+  });
+};
+
+const getProductsByCategory = async (categoriesUrlList) => {
+  const cluster = await initCluster();
+  // let counter = 0;
+
+  await clusterTask(cluster);
+
+  for (const { categoryUrl, label, name } of categoriesUrlList) {
+    await cluster.queue({ url: categoryUrl, label, name });
+    // counter++;
+
+    // if (counter === 10) break;
+  }
+
+  await cluster.idle();
+  await cluster.close();
+
+  createJsonOutput(categorizedProducts);
+};
 
 (async () => {
-  let catId = 1;
-  let categories;
-  let page;
+  const PRODUCTS_API_URL =
+    'https://mercado.carrefour.com.br/api/graphql?operationName=ProductGalleryQuery';
+  const ACTION_TIMEOUT = 1300;
 
-  const productsResult = [];
-  const productsByCategory = [];
-
-  const ACTION_TIMEOUT = 1250;
-
-  console.log('Executando Web Scraper\n');
-  console.log('Iniciando o broswer...\n');
+  console.log('>> Executando o Carrefour Web Scraper 🛒\n');
+  console.log('>> Iniciando o broswer...⌛\n ');
 
   //starts the Puppeteer browser.
   const browser = await p.launch({
-    headless: true, //Change this parameter to false, to disable headless and view the interactions on the screen.
+    headless: false, //Change this parameter to false, to disable headless and view the interactions on the screen.
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
 
   const baseUrl = 'https://mercado.carrefour.com.br/';
   const baseEndpoint = 'bebidas';
   const url = `${baseUrl}${baseEndpoint}`;
+  const apiResults = [];
 
   try {
-    page = await browser.newPage();
-
+    const page = await browser.newPage();
     await page.setRequestInterception(true);
+    let interceptionCounter = 0;
 
     page.on('request', (req) => {
-      if (['image'].includes(req.resourceType())) {
-        req.abort();
-      } else {
-        req.continue();
+      if (req.url().includes(PRODUCTS_API_URL)) {
+        if (interceptionCounter < 1) {
+          console.log(`>> Interceptando chamada à API em ${url} 🌐\n`);
+        }
+        interceptionCounter++;
+      }
+      req.continue();
+    });
+
+    page.on('response', async (res) => {
+      const req = res.request();
+      if (req.url().includes(PRODUCTS_API_URL)) {
+        try {
+          const responseJson = await res.json();
+          apiResults.push(responseJson);
+        } catch (error) {
+          console.log(`Erro ao interceptar o arquivo: ${error}`);
+        }
       }
     });
 
-    console.log(`Acessando página ${url}...\n`);
-
+    console.log(`>> Acessando página ${url}...\n`);
     await page.goto(url, { waitUntil: 'networkidle2' });
+
     const button = await page.waitForSelector(
       '::-p-xpath(//button[@title="Insira seu CEP"])',
       {
@@ -76,7 +277,7 @@ const createProduct = (title, price, url) => ({
       },
     );
 
-    console.log(`Selecionando loja Hiper Piracicaba...\n`);
+    console.log(`>> Selecionando loja Hiper Piracicaba...\n`);
     await button.click();
 
     const storeSelectorBtn = await page.waitForSelector(
@@ -100,7 +301,7 @@ const createProduct = (title, price, url) => ({
 
     piracicabaButton.click();
     await setTimeout(ACTION_TIMEOUT);
-    console.log(`Loja Selecionada\n`);
+    console.log(`>> Loja Selecionada ✅\n`);
 
     const showPagOptions = await page.waitForSelector(
       '::-p-xpath(//button[@data-testid="store-button" and contains(text(), "Exibindo")])',
@@ -114,171 +315,21 @@ const createProduct = (title, price, url) => ({
     );
 
     pagButton60.click();
+
     await setTimeout(ACTION_TIMEOUT);
 
-    //Captures category filter information and formats their names into endpoint format, to access them one by one later.
-    categories = await page.$$eval(
-      '::-p-xpath(//button[contains(text(), "Categoria")]) + div > ul > li',
-      (categories) =>
-        categories.map((category) => ({
-          category: category.innerText,
-          categoryEndpoint: category.innerText
-            .toLowerCase()
-            .split(' ')
-            .join('-')
-            .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, ''),
-        })),
-    );
+    console.log('>> Iniciando mapeamento de produtos, aguarde... ⌛\n');
 
-    console.log('Mapeando produtos por categoria. Aguarde... \n');
+    const lastApiResult = apiResults[apiResults.length - 1];
+
+    const categories = getCategoriesList(lastApiResult, url);
+
+    await getProductsByCategory(categories);
   } catch (e) {
-    console.error(`Falha na comunicação. Por favor, tente novamente: ${e}`);
+    console.error(
+      `>> ❌ Falha na comunicação. Por favor, tente novamente: ${e} ❌`,
+    );
+  } finally {
     await browser.close();
   }
-
-  let counter = 1;
-  // Product mapping loop by category, capturing its information
-  for (const { category, categoryEndpoint } of categories) {
-    if (category === 'Gelo') {
-      counter++;
-      continue;
-    }
-
-    let currentPage = 1;
-    let categoryUrl = `${url}/${categoryEndpoint}?page=${currentPage}`;
-    await page.goto(categoryUrl);
-
-    await page.waitForSelector('h2[data-testid="total-product-count"] span');
-
-    const productsPerPage = 60;
-
-    const totalProducts = await page.$eval(
-      'h2[data-testid="total-product-count"] span',
-      (el) => +el.innerText,
-    );
-    const totalPages = Math.ceil(totalProducts / productsPerPage);
-
-    productsByCategory.push({
-      category,
-      productsLink: [],
-      names: [],
-      prices: [],
-    });
-
-    let categoryIndex = productsByCategory.findIndex(
-      (product) => product.category === category,
-    );
-
-    console.log(
-      `Mapeando categoria ${counter} de ${categories.length}: ${category}`,
-    );
-
-    console.log(`----Página ${currentPage} de ${totalPages}`);
-
-    // Starts the categorization loop and captures product information.
-    do {
-      try {
-        // Wait for the product cards to appear on the screen.
-        await page.waitForSelector('ul > li > article', {
-          visible: true,
-          timeout: 10000,
-        });
-
-        // capture all the links of the products.
-        const links = await page.$$eval(
-          'ul > li > article > div > section > h3 > span > a',
-          (links) => links.map((link) => link.href),
-        );
-
-        // capture all the titles of the products.
-        const names = await page.$$eval(
-          'ul > li > article > div > section > h3 > span',
-          (names) => names.map((name) => name.title),
-        );
-
-        const cards = await page.$$('ul > li > article');
-
-        // capture all the prices of the products.
-        const prices = await Promise.all(
-          cards.map(async (card) => {
-            // captures all spans with data-test-id="price" inside the card.
-            const spans = await card.$$(
-              'div section div div span[data-test-id="price"]',
-            );
-
-            if (spans.length > 0) {
-              // Always grabs the last price inside the card, to avoid capturing two prices when the card has both the regular price and the discounted price.
-              return await spans[spans.length - 1].evaluate((el) =>
-                el.textContent.trim(),
-              );
-            }
-
-            return null;
-          }),
-        );
-
-        const validPrices = prices.filter((price) => price !== null);
-
-        for (const link of links) {
-          productsByCategory[categoryIndex].productsLink.push(link);
-        }
-
-        for (const name of names) {
-          productsByCategory[categoryIndex].names.push(name);
-        }
-
-        for (const price of validPrices) {
-          productsByCategory[categoryIndex].prices.push(
-            formatPriceToNumber(price),
-          );
-        }
-
-        if (totalPages === 1 || currentPage === totalPages) break;
-
-        currentPage++;
-        console.log(`----Página ${currentPage} de ${totalPages}`);
-
-        categoryUrl = `${url}/${categoryEndpoint}?page=${currentPage}`;
-
-        await page.goto(categoryUrl);
-      } catch {
-        break;
-      }
-    } while (currentPage <= totalPages);
-
-    const count = productsByCategory[categoryIndex].names.length;
-
-    productsResult.push({
-      id: catId,
-      category,
-      count,
-      products: [],
-    });
-
-    let productCategoryIndex = productsResult.findIndex(
-      (product) => product.category === category,
-    );
-
-    //Extracts the title, price, and URL of products by category, to insert into the final array, organizing them by category.
-    for (let i = 0; i < count; i++) {
-      const title = productsByCategory[categoryIndex].names[i];
-      const price = productsByCategory[categoryIndex].prices[i];
-      const url = productsByCategory[categoryIndex].productsLink[i];
-
-      productsResult[productCategoryIndex].products.push(
-        createProduct(title, price, url),
-      );
-    }
-
-    console.log(`A categoria ${category} foi mapeada com sucesso ✅ \n`);
-    counter++;
-    catId++;
-  }
-
-  console.log('Mapeamento concluído');
-
-  createJsonOutput(productsResult);
-
-  await browser.close();
 })();

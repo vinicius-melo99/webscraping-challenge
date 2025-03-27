@@ -19,6 +19,7 @@
     "prettier": "^3.5.3"
   },
   "dependencies": {
-    "puppeteer": "^24.4.0"
+    "puppeteer": "^24.4.0",
+    "puppeteer-cluster": "^0.24.0"
   }
 }
