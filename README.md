@@ -48,5 +48,5 @@ node src/index.js
 
 ### 📌 [1.1.0] - 26/03/2025
 - Melhorias significativas de desempenho;
-- Adição do puppteer-cluster, para executar tarefas paralelamente;
+- Adição do puppeteer-cluster, para executar tarefas paralelamente;
 - Adicionada interceptação/chamada às API's do Carrefour via fetch para capturar os dados de forma mais eficiente
